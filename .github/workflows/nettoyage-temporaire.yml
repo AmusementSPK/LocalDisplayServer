@@ -1,0 +1,35 @@
+# Flux temporaire : vide l'espace Actions de CE dépôt, puis la branche est supprimée.
+name: Nettoyage temporaire
+on:
+  push:
+    branches: [claude/nettoyage-actions]
+permissions:
+  actions: write
+  contents: read
+jobs:
+  nettoyer:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      GH_TOKEN: ${{ github.token }}
+      R: ${{ github.repository }}
+    steps:
+      - name: Nettoyer
+        run: |
+          set -uo pipefail
+          t() { numfmt --to=iec --suffix=o "${1:-0}"; }
+          # Fichiers produits : garde le plus récent de chaque nom.
+          art=$(gh api --paginate --slurp "repos/$R/actions/artifacts?per_page=100" | jq -r '
+            [.[].artifacts[]] | group_by(.name)[] | sort_by(.created_at) | reverse | .[1:][] | "\(.id)\t\(.size_in_bytes)"')
+          na=0; oa=0
+          while IFS=$'\t' read -r id o; do [ -z "$id" ] && continue
+            gh api -X DELETE "repos/$R/actions/artifacts/$id" --silent && { na=$((na+1)); oa=$((oa+o)); } || echo "échec artefact $id"
+          done <<< "$art"
+          gardes=$(gh api --paginate --slurp "repos/$R/actions/artifacts?per_page=100" | jq -r '[.[].artifacts[]] | "\(length) gardé(s), \(map(.size_in_bytes)|add // 0) octets"')
+          # Caches.
+          ca=$(gh api --paginate --slurp "repos/$R/actions/caches?per_page=100" | jq -r '.[].actions_caches[] | "\(.id)\t\(.size_in_bytes)"')
+          nc=0; oc=0
+          while IFS=$'\t' read -r id o; do [ -z "$id" ] && continue
+            gh api -X DELETE "repos/$R/actions/caches/$id" --silent && { nc=$((nc+1)); oc=$((oc+o)); } || echo "échec cache $id"
+          done <<< "$ca"
+          echo "RESULTAT $R : artefacts supprimés $na ($(t $oa)) ; caches supprimés $nc ($(t $oc)) ; restants : $gardes"
